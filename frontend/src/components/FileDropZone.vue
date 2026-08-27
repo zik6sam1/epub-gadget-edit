@@ -90,6 +90,51 @@ function startDispatcher() {
   if (dispatcherStarted || typeof window === 'undefined' || !window.runtime?.OnFileDrop) return
   OnFileDrop((x, y, paths) => dispatch(x, y, paths), false)
   dispatcherStarted = true
+  initContentFallback()
+}
+
+// ---------- 兜底通道 ----------
+// WebView2 < 1.0.1774.30 缺少 postMessageWithAdditionalObjects，
+// Wails 无法把拖放文件解析为路径。此时前端直接读取文件内容，
+// 经 Go 端 SaveDroppedFiles 落盘后得到路径，再走统一分发。
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer)
+  let bin = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)))
+  }
+  return btoa(bin)
+}
+
+function initContentFallback() {
+  const w = window
+  if (w.__epubDropFallbackInstalled) return
+  if (w.chrome?.webview?.postMessageWithAdditionalObjects) return // 原生路径通道可用
+  w.addEventListener('drop', async (e) => {
+    const dt = e.dataTransfer
+    if (!dt || !Array.from(dt.types || []).includes('Files')) return
+    const files = Array.from(dt.files || [])
+    if (files.length === 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      const app = w.go?.main?.App
+      if (!app?.SaveDroppedFiles) {
+        console.error('SaveDroppedFiles binding unavailable')
+        return
+      }
+      const payload = []
+      for (const f of files) {
+        payload.push({ name: f.name, data: toBase64(await f.arrayBuffer()) })
+      }
+      const paths = await app.SaveDroppedFiles(payload)
+      if (paths && paths.length > 0) dispatch(e.clientX, e.clientY, paths)
+    } catch (err) {
+      console.error('拖放兜底通道失败:', err)
+    }
+  }, true)
+  w.__epubDropFallbackInstalled = true
 }
 
 let unregisterZone = null

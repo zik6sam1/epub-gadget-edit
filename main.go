@@ -28,7 +28,11 @@ func main() {
 		OnStartup:        app.startup,
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:  true,
-			DisableWebViewDrop: true,
+			// Windows 上此项为 true 会调用 PutAllowExternalDrag(false)，
+			// 彻底禁止外部文件拖入页面（DOM drag/drop 事件不再触发），
+			// 导致 v2.12 基于 DOM drop + postMessageWithAdditionalObjects
+			// 的路径解析链路完全失效，因此必须保持 false。
+			DisableWebViewDrop: false,
 			CSSDropProperty: "--wails-drop-target",
 			CSSDropValue:    "drop",
 		},

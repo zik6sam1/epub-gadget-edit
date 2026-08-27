@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,6 +117,43 @@ func getExeDir() string {
 
 // getEmbeddedBackend returns the embedded backend path (set by windows_embed.go)
 var getEmbeddedBackend func() string = func() string { return "" }
+
+// DroppedFile 拖放兜底通道的文件载荷（前端在 WebView2 过旧、无法传递
+// 文件路径时，直接上传 base64 文件内容）
+type DroppedFile struct {
+	Name string `json:"name"`
+	Data string `json:"data"`
+}
+
+// SaveDroppedFiles 将前端直接上传的拖放文件写入临时目录并返回路径。
+// 仅作为 WebView2 < 1.0.1774.30（无 postMessageWithAdditionalObjects）时的兜底。
+func (a *App) SaveDroppedFiles(files []DroppedFile) ([]string, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	dir := filepath.Join(os.TempDir(), "epub-toolbox-drops")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("创建临时目录失败: %w", err)
+	}
+	stamp := time.Now().UnixNano()
+	paths := make([]string, 0, len(files))
+	for i, f := range files {
+		raw, err := base64.StdEncoding.DecodeString(f.Data)
+		if err != nil {
+			return nil, fmt.Errorf("解码第 %d 个文件失败: %w", i+1, err)
+		}
+		name := filepath.Base(strings.ReplaceAll(f.Name, "\\", "/"))
+		if name == "" || name == "." || name == "/" {
+			name = fmt.Sprintf("dropped-%d.bin", stamp+int64(i))
+		}
+		dst := filepath.Join(dir, fmt.Sprintf("%d_%s", stamp+int64(i), name))
+		if err := os.WriteFile(dst, raw, 0644); err != nil {
+			return nil, fmt.Errorf("保存拖放文件失败: %w", err)
+		}
+		paths = append(paths, dst)
+	}
+	return paths, nil
+}
 
 // findBackendBinary locates the converter-backend binary
 func (a *App) findBackendBinary() string {
